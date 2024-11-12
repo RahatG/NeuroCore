@@ -1,0 +1,8 @@
+{
+    "tokenizer": "simple",
+    "stopwords_path": "/home/rahat/NeuroCore/Data/stopwords.txt",
+    "lemmatizer": "simple",
+    "ner_model_path": "/home/rahat/NeuroCore/Models/final/ner_model.pth",
+    "sentiment_model_path": "/home/rahat/NeuroCore/Models/final/sentiment_model.pth",
+    "pos_tagger_model_path": "/home/rahat/NeuroCore/Models/final/pos_tagger_model.pth"
+}

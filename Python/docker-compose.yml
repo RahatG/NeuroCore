@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  neurocore:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Data:/home/rahat/NeuroCore/EAI_Model/arxiver/data
+      - ./Models:/home/rahat/NeuroCore/EAI_Model/model
+    env_file:
+      - .env
