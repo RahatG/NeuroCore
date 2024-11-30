@@ -1,58 +1,42 @@
-from setuptools import setup, Extension
-import pybind11
-from setuptools.command.build_ext import build_ext
+# test_interface_engine.py
 
-class get_pybind_include(object):
-    """Helper class to determine the pybind11 include path."""
-    def __str__(self):
-        return pybind11.get_include()
+from InterfaceEngine import DataLoader, InterfaceEngine
 
-ext_modules = [
-    Extension(
-        'InterfaceEngine',
-        [
-            'src/interface/pybind_module.cpp',
-            'src/interface/InterfaceEngine.cpp',
-            'src/model/NeuralNetwork.cpp',
-            'src/model/Layers/DenseLayer.cpp',
-            'src/model/Layers/ConvolutionLayer.cpp',
-            'src/model/Layers/RecurrentLayer.cpp',
-            'src/model/Layers/TransformerLayer.cpp',
-            'src/model/Optimizers/Adam.cpp',
-            'src/model/Optimizers/SGD.cpp',
-            'src/model/Optimizers/RMSProp.cpp',
-            'src/training/LossFunctions/CrossEntropyLoss.cpp',
-            'src/training/LossFunctions/MeanSquaredLoss.cpp',
-            'src/training/Metrics/Accuracy.cpp',
-            'src/training/Metrics/Precision.cpp',
-            'src/training/Metrics/Recall.cpp',
-            'src/utils/Logger.cpp',
-            'src/data/DataLoader.cpp',
-            'src/data/Tokenizer.cpp',
-            'src/data/Preprocessing/TextCleaner.cpp',
-            'src/data/Preprocessing/StopWordsRemover.cpp',
-            'src/data/Preprocessing/Lemmatiser.cpp',
-            'src/nlp/NLPProcessor.cpp',  # Ensure inclusion
-        ],
-        include_dirs=[
-            get_pybind_include(),
-            # Add other include directories if necessary
-        ],
-        language='c++',
-        extra_compile_args=['-O3'],
-    ),
-]
+def main():
+    # Initialize DataLoader with a sample data path
+    data_path = "/home/rahat/arxiver/data/train.parquet"  # Ensure this path is correct
+    try:
+        data_loader = DataLoader(data_path)
+        data = data_loader.load_data()
+        print(f"Loaded {len(data)} data entries.")
+    except Exception as e:
+        print(f"DataLoader failed: {e}")
+        return
 
-setup(
-    name='InterfaceEngine',
-    version='0.1',
-    author='Your Name',
-    author_email='your.email@example.com',
-    description='Pybind11 Interface for C++ Backend',
-    ext_modules=ext_modules,
-    install_requires=['pybind11'],
-    cmdclass={'build_ext': build_ext},
-    zip_safe=False,
-)
+    # Initialize InterfaceEngine with data and model output paths
+    model_output_path = "/home/rahat/NeuroCore/Model/"  # Ensure this path is correct
+    try:
+        engine = InterfaceEngine(data_path, model_output_path)
+        print("InterfaceEngine initialized successfully.")
+    except Exception as e:
+        print(f"InterfaceEngine initialization failed: {e}")
+        return
 
+    # Test the predict method
+    sample_text = "This is a sample input text for prediction."
+    try:
+        predictions = engine.predict(sample_text)
+        print(f"Predictions for '{sample_text}': {predictions}")
+    except Exception as e:
+        print(f"Prediction failed: {e}")
 
+    # Test the train method
+    epochs = 1  # Start with 1 epoch for testing
+    try:
+        engine.train(epochs)
+        print(f"Training completed for {epochs} epoch(s).")
+    except Exception as e:
+        print(f"Training failed: {e}")
+
+if __name__ == "__main__":
+    main()

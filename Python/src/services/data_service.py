@@ -1,4 +1,4 @@
-from ..data.DataLoader import DataLoader
+from InterfaceEngine import DataLoader
 
 class DataService:
     def __init__(self, data_path):

@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  neurocore:
+    build: .
+    ports:
+      - "8080:8080" # Adjust based on your application's listening port
+    volumes:
+      - ./Data:/mnt/data
+      - ./Models:/mnt/model
+    environment:
+      - TRAIN_DATA_PATH=/mnt/data/train.parquet
+      - MODEL_OUTPUT_PATH=/mnt/model

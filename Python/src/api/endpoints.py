@@ -32,3 +32,8 @@ def predict(request: PredictRequest):
 def train(request: TrainRequest):
     training_service.train(request.epochs)
     return TrainResponse(message=f"Training started for {request.epochs} epochs.")
+
+cp cpp_backend/build/interface/InterfaceEngine.so /home/rahat/NeuroCore/Python/.venv/lib/python3.10/site-packages/
+cpp_backend\build\interface
+
+"\\wsl.localhost\Ubuntu\home\rahat\NeuroCore\cpp_backend\build\interface\InterfaceEngine.so"

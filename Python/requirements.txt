@@ -1,1 +1,7 @@
-fastapi uvicorn pydantic pyjwt sqlalchemy pytest torch
+fastapi
+uvicorn
+pydantic
+pyjwt
+sqlalchemy
+pytest
+torch

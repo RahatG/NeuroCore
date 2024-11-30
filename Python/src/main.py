@@ -7,3 +7,9 @@ app = FastAPI(title="NeuroCore AI API")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(endpoints.router, prefix="/api/v1")
 app.include_router(health_check.router, prefix="/api/v1")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
