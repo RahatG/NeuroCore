@@ -1,0 +1,2 @@
+C:\WINDOWS\system32\wsl.exe --distribution Ubuntu --exec /bin/bash -c "export CMAKE_COLOR_DIAGNOSTICS=ON && export CLION_IDE=TRUE && export JETBRAINS_IDE=TRUE && cd /home/rahat/NeuroCore/cpp_backend/cmake-build-debug && /usr/bin/cmake -DCMAKE_BUILD_TYPE=Debug -G 'CodeBlocks - Unix Makefiles' /home/rahat/NeuroCore/cpp_backend"
+/bin/bash: line 1: /usr/bin/cmake: No such file or directory
