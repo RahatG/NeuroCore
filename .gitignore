@@ -1,0 +1,24 @@
+# Ignore cache directories
+.cache/
+
+# Ignore IDE configuration directories
+.idea/
+.vscode/
+Python/.idea/
+cpp_backend/.idea/
+
+# Ignore Python virtual environments
+.venv/
+Python/.venv/
+
+# Ignore build directories
+cpp_backend/cmake-build-debug/
+build/
+
+# Ignore Docker-related files
+.dockerignore
+Dockerfile
+
+# Ignore other specific files
+h.autoSetupRemote
+# README.md  # Uncomment if you want to track README.md

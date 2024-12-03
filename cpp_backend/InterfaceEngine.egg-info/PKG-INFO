@@ -1,6 +1,0 @@
-Metadata-Version: 2.1
-Name: InterfaceEngine
-Version: 0.1
-Summary: InterfaceEngine Python bindings
-Author: Rahat
-Requires-Dist: pybind11>=2.5.0
