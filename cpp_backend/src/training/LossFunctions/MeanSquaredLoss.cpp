@@ -1,10 +1,13 @@
-#include <cstddef> // Add this line
 #include "MeanSquaredLoss.h"
 #include <cmath>
 
+MeanSquaredLoss::~MeanSquaredLoss() {
+    // Destructor definition (even if empty)
+}
+
 float MeanSquaredLoss::compute_loss(const std::vector<float>& predictions, const std::vector<float>& targets) {
     float loss = 0.0f;
-    for (std::size_t i = 0; i < predictions.size(); ++i) {
+    for(size_t i = 0; i < predictions.size(); ++i) {
         float diff = predictions[i] - targets[i];
         loss += diff * diff;
     }
@@ -13,7 +16,7 @@ float MeanSquaredLoss::compute_loss(const std::vector<float>& predictions, const
 
 std::vector<float> MeanSquaredLoss::compute_gradient(const std::vector<float>& predictions, const std::vector<float>& targets) {
     std::vector<float> grad(predictions.size(), 0.0f);
-    for (std::size_t i = 0; i < predictions.size(); ++i) {
+    for(size_t i = 0; i < predictions.size(); ++i) {
         grad[i] = 2.0f * (predictions[i] - targets[i]) / predictions.size();
     }
     return grad;

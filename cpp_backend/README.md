@@ -25,3 +25,12 @@ NeuroCore is a C++ backend for the AI project, handling data preprocessing, neur
 
 ## Future
 1. **Google Test**
+
+## Run
+cd ~/NeuroCore/cpp_backend
+rm -rf build
+mkdir build
+cd build
+cmake .. -DCMAKE_TOOLCHAIN_FILE=/home/rahat/vcpkg/scripts/buildsystems/vcpkg.cmake
+make -j$(nproc)
+cp interface/InterfaceEngine.so /home/rahat/NeuroCore/Python/.venv/lib/python3.12/site-packages/

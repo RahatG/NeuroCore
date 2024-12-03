@@ -5,6 +5,7 @@
 
 class LossFunction {
 public:
+    virtual ~LossFunction() {}
     virtual float compute_loss(const std::vector<float>& predictions, const std::vector<float>& targets) = 0;
     virtual std::vector<float> compute_gradient(const std::vector<float>& predictions, const std::vector<float>& targets) = 0;
 };

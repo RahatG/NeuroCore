@@ -1,15 +1,9 @@
-
----
-
-## **Configuration Files**
-
-### **Config/config.json**
-
-```json
 {
-"data_path": "/home/rahat/NeuroCore/EAI_Model/arxiver/data/train.parquet",
-"model_output_path": "/home/rahat/NeuroCore/EAI_Model/model",
-"optimizer": "Adam",
-"learning_rate": 0.001,
-"epochs": 10
+    "data_path": "/home/rahat/NeuroCore/EAI_Model/arxiver/data/train.parquet",
+    "model_output_path": "/home/rahat/NeuroCore/EAI_Model/model",
+    "optimizer": "Adam",
+    "learning_rate": 0.001,
+    "epochs": 10,
+    "secret_key": "EC57D15924DF4B95344A47E95C2C5",
+    "algorithm": "HS256"
 }

@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+setup.py
+InterfaceEngine.egg-info/PKG-INFO
+InterfaceEngine.egg-info/SOURCES.txt
+InterfaceEngine.egg-info/dependency_links.txt
+InterfaceEngine.egg-info/not-zip-safe
+InterfaceEngine.egg-info/requires.txt
+InterfaceEngine.egg-info/top_level.txt
+src/interface/InterfaceEngine.cpp
+src/model/NeuralNetwork.cpp
+src/model/Layers/DenseLayer.cpp

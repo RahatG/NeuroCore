@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <memory>
+#include <string>
 #include "Layers/DenseLayer.h"
 #include "Layers/ConvolutionLayer.h"
 #include "Layers/RecurrentLayer.h"
@@ -12,6 +13,7 @@
 #include "Activation/Softmax.h"
 #include "Activation/Tanh.h"
 #include "Optimizers/Optimizer.h"
+#include "../utils/Logger.h"
 
 class NeuralNetwork {
 public:
@@ -19,6 +21,11 @@ public:
     std::vector<float> forward(const std::vector<float>& input);
     std::vector<float> backward(const std::vector<float>& loss_grad);
     void update_parameters();
+
+    // Save and load model parameters
+    void save(const std::string& path);
+    void load(const std::string& path);
+
 private:
     std::vector<DenseLayer> dense_layers;
     ReLU relu;
@@ -26,6 +33,7 @@ private:
     Activation::Softmax softmax;
     Tanh tanh;
     std::unique_ptr<Optimizer> optimizer;
+    Logger logger;
 
     // Corrected Gradient Storage
     std::vector<std::vector<std::vector<float>>> weight_grads; // [layer][neuron][weight]

@@ -1,12 +1,14 @@
-#include <cstddef> // Add this line
 #include "Accuracy.h"
+#include <algorithm>
+
+Accuracy::~Accuracy() {
+    // Destructor definition (even if empty)
+}
 
 float Accuracy::compute(const std::vector<float>& predictions, const std::vector<float>& targets) {
-    int correct = 0;
-    for (std::size_t i = 0; i < predictions.size(); ++i) {
-        if ((predictions[i] > 0.5f) == (targets[i] > 0.5f)) {
-            correct++;
-        }
-    }
-    return static_cast<float>(correct) / predictions.size();
+    auto pred_it = std::max_element(predictions.begin(), predictions.end());
+    auto target_it = std::max_element(targets.begin(), targets.end());
+    int pred_class = std::distance(predictions.begin(), pred_it);
+    int target_class = std::distance(targets.begin(), target_it);
+    return pred_class == target_class ? 1.0f : 0.0f;
 }

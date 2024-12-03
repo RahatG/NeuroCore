@@ -1,84 +1,143 @@
 #include "InterfaceEngine.h"
-#include "data/DataLoader.h"
-#include "model/NeuralNetwork.h"
-#include "training/LossFunctions/CrossEntropyLoss.h"
-#include "training/Metrics/Accuracy.h"
-#include "utils/Logger.h"
-#include "nlp/NLPProcessor.h"
-#include <complex>
+#include "../training/LossFunctions/CrossEntropyLoss.h"
+#include "../training/Metrics/Accuracy.h"
+#include "../data/Preprocessing/TextCleaner.h"
+#include "../data/Tokenizer.h"
+#include "../utils/FileUtils.h"
+#include <algorithm> // For std::min
+#include <random>
 
-// Constructor
 InterfaceEngine::InterfaceEngine(const std::string& data_path, const std::string& model_output_path)
-        : network(), nlp_processor() {
+    : network(), nlp_processor(), logger(INFO), config("../config/config.json") {
     // Initialize with data and model paths
     DataLoader data_loader(data_path);
     training_data = data_loader.load_data();
+
+    // Initialize loss function and metric
+    loss_fn = std::make_unique<CrossEntropyLoss>();
+    metric_fn = std::make_unique<Accuracy>();
+
+    // Load model if exists
+    if (FileUtils::file_exists(model_output_path + "model.bin")) {
+        load_model(model_output_path + "model.bin");
+        logger.log("Model loaded from " + model_output_path + "model.bin");
+    } else {
+        logger.log("No existing model found. Starting with a new model.");
+    }
 }
 
-// Predict method
 std::vector<float> InterfaceEngine::predict(const std::string& input_text) {
     std::vector<std::string> tokens = nlp_processor.process_text(input_text);
-    std::vector<float> input_vector(tokens.size(), 0.0f);
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        input_vector[i] = static_cast<float>(tokens[i].length()); // Example conversion
+
+    // Fixed input size
+    const size_t fixed_input_size = 100;
+    std::vector<float> input_vector(fixed_input_size, 0.0f);
+
+    // Convert tokens to input vector
+    for (size_t i = 0; i < std::min(tokens.size(), fixed_input_size); ++i) {
+        // Implement embedding lookup or token encoding
+        input_vector[i] = nlp_processor.get_token_id(tokens[i]);
     }
+
     return network.forward(input_vector);
 }
 
-// Train method
-void InterfaceEngine::train(int epochs) {
-    Logger logger(INFO);
-    CrossEntropyLoss loss_fn;
-    Accuracy metric_fn;
+void InterfaceEngine::train(int epochs, size_t batch_size) {
+    const size_t fixed_input_size = 100; // Ensure consistent input size
+    size_t total_batches = (training_data.size() + batch_size - 1) / batch_size;
 
     for (int epoch = 0; epoch < epochs; ++epoch) {
-        for (const auto& data : training_data) {
-            std::vector<std::string> tokens = nlp_processor.process_text(data);
-            std::vector<float> input_vector(tokens.size(), 0.0f);
-            for (size_t i = 0; i < tokens.size(); ++i) {
-                input_vector[i] = static_cast<float>(tokens[i].length()); // Example conversion
+        logger.log("Starting epoch " + std::to_string(epoch + 1));
+
+        // Shuffle training data to improve training
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(training_data.begin(), training_data.end(), g);
+
+        float epoch_loss = 0.0f;
+        float epoch_accuracy = 0.0f;
+
+        for (size_t batch_num = 0; batch_num < total_batches; ++batch_num) {
+            size_t start_idx = batch_num * batch_size;
+            size_t end_idx = std::min(start_idx + batch_size, training_data.size());
+
+            // Vectors to accumulate gradients over the batch
+            float batch_loss = 0.0f;
+            float batch_accuracy = 0.0f;
+
+            for (size_t idx = start_idx; idx < end_idx; ++idx) {
+                const auto& data = training_data[idx];
+                std::vector<std::string> tokens = nlp_processor.process_text(data);
+
+                // Prepare input vector with fixed size
+                std::vector<float> input_vector(fixed_input_size, 0.0f);
+                for (size_t i = 0; i < std::min(tokens.size(), fixed_input_size); ++i) {
+                    input_vector[i] = nlp_processor.get_token_id(tokens[i]);
+                }
+
+                // Forward pass
+                std::vector<float> output = network.forward(input_vector);
+
+                // Get target and compute loss
+                std::vector<float> target = get_target_for_data(data);
+                float loss = loss_fn->compute_loss(output, target);
+                batch_loss += loss;
+
+                // Compute gradient and backpropagate
+                std::vector<float> grad_output = loss_fn->compute_gradient(output, target);
+                network.backward(grad_output);
+
+                // Update accuracy
+                batch_accuracy += metric_fn->compute(output, target);
             }
-            std::vector<float> output = network.forward(input_vector);
 
-            // Calculate loss and perform backpropagation
-            std::vector<float> target = get_target_for_data(data); // Assume this function provides the target output
-            float loss = calculate_loss(output, target); // Calculate the loss
-            std::vector<float> grad_output = calculate_gradient(output, target); // Calculate the gradient of the loss
-            network.backward(grad_output);
-
-            // Update network parameters
+            // Update network parameters after processing the batch
             network.update_parameters();
+
+            // Log batch loss and accuracy
+            logger.log("Epoch " + std::to_string(epoch + 1) + ", Batch " + std::to_string(batch_num + 1) +
+                       "/" + std::to_string(total_batches) + ": Loss = " + 
+                       std::to_string(batch_loss / (end_idx - start_idx)) +
+                       ", Accuracy = " + std::to_string(batch_accuracy / (end_idx - start_idx)));
+
+            epoch_loss += batch_loss;
+            epoch_accuracy += batch_accuracy;
         }
-        logger.log("Epoch " + std::to_string(epoch + 1) + " completed.");
+
+        // Log epoch metrics
+        logger.log("Epoch " + std::to_string(epoch + 1) + " completed. Average Loss: " +
+                   std::to_string(epoch_loss / training_data.size()) +
+                   ", Average Accuracy: " + std::to_string(epoch_accuracy / training_data.size()));
     }
+
+    // Save the trained model
+    save_model("../Model/model.bin");
+    logger.log("Model saved after training.");
 }
 
-// Helper function to get target vectors
 std::vector<float> InterfaceEngine::get_target_for_data(const std::string& data) {
     // Implement logic to convert data to target vectors
-    // For example, one-hot encoding for classification tasks
+    // For this example, we will generate a dummy target vector
     std::vector<float> target(10, 0.0f); // Assuming 10 classes
-    // Set the appropriate index to 1 based on the data label
-    // Example: target[3] = 1.0f;
+    int random_class = std::hash<std::string>{}(data) % 10;
+    target[random_class] = 1.0f;
     return target;
 }
 
-// Calculate loss using Cross-Entropy
 float InterfaceEngine::calculate_loss(const std::vector<float>& predictions, const std::vector<float>& targets) {
-    // Implement loss calculation, e.g., Cross-Entropy Loss
-    float loss = 0.0f;
-    for(size_t i = 0; i < predictions.size(); ++i) {
-        loss -= targets[i] * std::log(predictions[i] + 1e-15f);
-    }
-    return loss;
+    return loss_fn->compute_loss(predictions, targets);
 }
 
-// Calculate gradient of the loss
 std::vector<float> InterfaceEngine::calculate_gradient(const std::vector<float>& predictions, const std::vector<float>& targets) {
-    // Implement gradient calculation for the loss function
-    std::vector<float> grad(predictions.size(), 0.0f);
-    for(size_t i = 0; i < predictions.size(); ++i) {
-        grad[i] = -targets[i] / (predictions[i] + 1e-15f);
-    }
-    return grad;
+    return loss_fn->compute_gradient(predictions, targets);
+}
+
+void InterfaceEngine::save_model(const std::string& path) {
+    // Implement model saving logic
+    network.save(path);
+}
+
+void InterfaceEngine::load_model(const std::string& path) {
+    // Implement model loading logic
+    network.load(path);
 }

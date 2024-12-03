@@ -5,6 +5,7 @@
 
 class Metric {
 public:
+    virtual ~Metric() {}
     virtual float compute(const std::vector<float>& predictions, const std::vector<float>& targets) = 0;
 };
 

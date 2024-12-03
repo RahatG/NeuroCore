@@ -2,10 +2,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import jwt
 import datetime
+from ..config.settings import settings  # Ensure correct import path
 
 router = APIRouter()
-
-SECRET_KEY = "your_secret_key"
 
 class Token(BaseModel):
     access_token: str
@@ -17,10 +16,11 @@ class Login(BaseModel):
 
 @router.post("/login", response_model=Token)
 def login(login: Login):
+    # Replace with actual user authentication logic
     if login.username == "admin" and login.password == "password":
         token = jwt.encode({
             "sub": login.username,
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2)
-        }, SECRET_KEY, algorithm="HS256")
+        }, settings.secret_key, algorithm=settings.algorithm)
         return {"access_token": token, "token_type": "bearer"}
     raise HTTPException(status_code=400, detail="Invalid credentials")

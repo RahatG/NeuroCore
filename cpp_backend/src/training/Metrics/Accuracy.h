@@ -5,6 +5,9 @@
 
 class Accuracy : public Metric {
 public:
+    Accuracy() = default;
+    virtual ~Accuracy() override;  // Explicit destructor declaration
+
     float compute(const std::vector<float>& predictions, const std::vector<float>& targets) override;
 };
 

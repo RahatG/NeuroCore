@@ -13,22 +13,70 @@ class PredictRequest(BaseModel):
 
 class TrainRequest(BaseModel):
     epochs: int
-# __init__.py
-from .user_models import User, UserCreate, UserUpdate
-from .nlp_models import PredictRequest, PredictResponse, TrainRequest, TrainResponse
-from pydantic import BaseModel
+# src/models/__init__.py
 
-class User(BaseModel):
+from .user import User  # SQLAlchemy model
+from .user_models import UserCreate, UserUpdate, UserInDB
+from .nlp_models import (
+    PredictRequest,
+    PredictResponse,
+    TrainRequest,
+    TrainResponse,
+    NERResponse,
+    SentimentResponse,
+    POSTaggerResponse,
+)
+
+__all__ = [
+    "User",
+    "UserCreate",
+    "UserUpdate",
+    "UserInDB",
+    "PredictRequest",
+    "PredictResponse",
+    "TrainRequest",
+    "TrainResponse",
+    "NERResponse",
+    "SentimentResponse",
+    "POSTaggerResponse",
+]
+# src/models/user_models.py
+
+from pydantic import BaseModel
+from typing import List, Optional
+
+# User-related Pydantic Models
+
+class UserBase(BaseModel):
     username: str
 
-class UserCreate(BaseModel):
-    username: str
+class UserCreate(UserBase):
     password: str
 
-class UserUpdate(BaseModel):
-    password: str
-from pydantic import BaseModel
-from typing import List
+class UserUpdate(UserBase):
+    password: Optional[str] = None  # Allow password updates
+
+class UserInDB(UserBase):
+    id: int
+    hashed_password: str
+
+    model_config = {
+        "from_attributes": True
+    }
+
+# NLP-related Pydantic Models (Consider moving these to nlp_models.py for clarity)
+
+class PredictRequest(BaseModel):
+    text: str
+
+class PredictResponse(BaseModel):
+    prediction: List[float]
+
+class TrainRequest(BaseModel):
+    epochs: int
+
+class TrainResponse(BaseModel):
+    message: str
 
 class NERResponse(BaseModel):
     entities: List[dict]
@@ -38,7 +86,42 @@ class SentimentResponse(BaseModel):
 
 class POSTaggerResponse(BaseModel):
     pos_tags: List[dict]
-    
+# src/models/user.py
+
+from sqlalchemy import Column, Integer, String
+from ..database import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+# src/models/nlp_models.py
+
+from pydantic import BaseModel
+from typing import List, Optional
+
+class PredictRequest(BaseModel):
+    text: str  # The text you want to analyze
+
+class PredictResponse(BaseModel):
+    prediction: List[float]  # Example: Probability scores for each class
+
+class TrainRequest(BaseModel):
+    epochs: int  # Number of training epochs
+
+class TrainResponse(BaseModel):
+    message: str  # Confirmation message
+
+class NERResponse(BaseModel):
+    entities: List[dict]  # Named entities found
+
+class SentimentResponse(BaseModel):
+    sentiment: float  # Sentiment score
+
+class POSTaggerResponse(BaseModel):
+    pos_tags: List[dict]  # Part-of-speech tags
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -95,10 +178,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import jwt
 import datetime
+from ..config.settings import settings  # Ensure correct import path
 
 router = APIRouter()
-
-SECRET_KEY = "your_secret_key"
 
 class Token(BaseModel):
     access_token: str
@@ -110,30 +192,47 @@ class Login(BaseModel):
 
 @router.post("/login", response_model=Token)
 def login(login: Login):
+    # Replace with actual user authentication logic
     if login.username == "admin" and login.password == "password":
         token = jwt.encode({
             "sub": login.username,
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2)
-        }, SECRET_KEY, algorithm="HS256")
+        }, settings.secret_key, algorithm=settings.algorithm)
         return {"access_token": token, "token_type": "bearer"}
     raise HTTPException(status_code=400, detail="Invalid credentials")
 # Constants used across the application
 API_V1_STR = "/api/v1"
-from pydantic import BaseSettings
+# src/config/settings.py
+
+from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+dotenv_path = os.path.join(os.path.dirname(__file__), '../.env')
+load_dotenv(dotenv_path)
 
 class Settings(BaseSettings):
-    data_path: str
-    model_output_path: str
-    optimizer: str
-    learning_rate: float
-    epochs: int
-    secret_key: str
+    data_path: str = "/home/rahat/NeuroCore/EAI_Model/arxiver/data/train.parquet"
+    model_output_path: str = "/home/rahat/NeuroCore/EAI_Model/model"
+    optimizer: str = "Adam"
+    learning_rate: float = 0.001
+    epochs: int = 10
+    secret_key: str = "EC57D15924DF4B95344A47E95C2C5"
     algorithm: str = "HS256"
+    host: str = "0.0.0.0"
+    port: int = 8000
+    log_level: str = "DEBUG"
+    database_uri: str = "sqlite:///neurocore.db"
 
-    class Config:
-        env_file = "../.env"
+    model_config = {
+        "from_attributes": True,
+        "env_file": "../.env",
+        "protected_namespaces": ("settings_",),
+    }
 
 settings = Settings()
+print(f"Settings Loaded: {settings.dict()}")
 # __init__.py
 from .settings import Settings
 
@@ -233,6 +332,84 @@ class Embedder:
         indices = [self.vocab[token] for token in tokens if token in self.vocab]
         tensor = torch.tensor(indices, dtype=torch.long)
         return self.embedding(tensor).detach().numpy()
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config
+from sqlalchemy import pool
+
+from alembic import context
+
+# this is the Alembic Config object, which provides
+# access to the values within the .ini file in use.
+config = context.config
+
+# Interpret the config file for Python logging.
+# This line sets up loggers basically.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# add your model's MetaData object here
+# for 'autogenerate' support
+# from myapp import mymodel
+# target_metadata = mymodel.Base.metadata
+target_metadata = None
+
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
+
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode.
+
+    This configures the context with just a URL
+    and not an Engine, though an Engine is acceptable
+    here as well.  By skipping the Engine creation
+    we don't even need a DBAPI to be available.
+
+    Calls to context.execute() here emit the given string to the
+    script output.
+
+    """
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode.
+
+    In this scenario we need to create an Engine
+    and associate a connection with the context.
+
+    """
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
 import logging
 from ..config.settings import settings
 
@@ -244,14 +421,13 @@ def get_logger(name: str):
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     return logger
+# src/database.py
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from ..config.settings import settings
+from .config.settings import settings
 
-SQLALCHEMY_DATABASE_URL = settings.database_uri
-
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_engine(settings.database_uri)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 # __init__.py
@@ -284,21 +460,60 @@ from ..config.settings import settings
 
 def get_settings():
     return settings
-from fastapi import FastAPI
-from .api import endpoints, auth, health_check
-from .config.constants import API_V1_STR
+from fastapi import FastAPI, Depends, HTTPException
+from pydantic import BaseModel
+from typing import List
+import InterfaceEngine  # C++ module import
+from .auth import router as auth_router
+from .endpoints import router as endpoints_router
+from .health_check import router as health_check_router
+from .config.settings import settings
 
 app = FastAPI(title="NeuroCore AI API")
 
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(endpoints.router, prefix="/api/v1")
-app.include_router(health_check.router, prefix="/api/v1")
+# Include Routers
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(endpoints_router, prefix="/api/v1")
+app.include_router(health_check_router, prefix="/api/v1")
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Initialize InterfaceEngine (Singleton Pattern)
+try:
+    engine = InterfaceEngine.InterfaceEngine(settings.data_path, settings.model_output_path)
+    print("InterfaceEngine initialized successfully.")
+except Exception as e:
+    print(f"Failed to initialize InterfaceEngine: {e}")
+    raise e
 
+# Define Pydantic Models
+class PredictRequest(BaseModel):
+    text: str
 
+class PredictResponse(BaseModel):
+    prediction: List[float]
+
+class TrainRequest(BaseModel):
+    epochs: int
+
+class TrainResponse(BaseModel):
+    message: str
+
+# Prediction Endpoint
+@app.post("/api/v1/predict", response_model=PredictResponse)
+def predict(request: PredictRequest):
+    try:
+        prediction = engine.predict(request.text)
+        return PredictResponse(prediction=prediction)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Training Endpoint
+@app.post("/api/v1/train", response_model=TrainResponse)
+def train(request: TrainRequest):
+    try:
+        engine.train(request.epochs)
+        return TrainResponse(message=f"Training started for {request.epochs} epoch(s).")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # inspect_parquet.py
 
 import pyarrow.parquet as pq
@@ -317,47 +532,57 @@ def inspect_parquet(file_path):
 if __name__ == "__main__":
     parquet_file = "/home/rahat/arxiver/data/train.parquet"  # Update this path if different
     inspect_parquet(parquet_file)
-# test_interface_engine.py
-
-from InterfaceEngine import DataLoader, InterfaceEngine
+import InterfaceEngine
 
 def main():
-    # Initialize DataLoader with a sample data path
-    data_path = "/home/rahat/arxiver/data/train.parquet"  # Ensure this path is correct
     try:
-        data_loader = DataLoader(data_path)
-        data = data_loader.load_data()
-        print(f"Loaded {len(data)} data entries.")
-    except Exception as e:
-        print(f"DataLoader failed: {e}")
-        return
-
-    # Initialize InterfaceEngine with data and model output paths
-    model_output_path = "/home/rahat/NeuroCore/Model/"  # Ensure this path is correct
-    try:
-        engine = InterfaceEngine(data_path, model_output_path)
+        # Initialize InterfaceEngine
+        data_path = "/home/rahat/NeuroCore/EAI_Model/arxiver/data/train.parquet"
+        model_output_path = "/home/rahat/NeuroCore/EAI_Model/model"
+        engine = InterfaceEngine.InterfaceEngine(data_path, model_output_path)
         print("InterfaceEngine initialized successfully.")
-    except Exception as e:
-        print(f"InterfaceEngine initialization failed: {e}")
-        return
 
-    # Test the predict method
-    sample_text = "This is a sample input text for prediction."
-    try:
-        predictions = engine.predict(sample_text)
-        print(f"Predictions for '{sample_text}': {predictions}")
-    except Exception as e:
-        print(f"Prediction failed: {e}")
+        # Perform a prediction
+        sample_text = "This is a sample input text for prediction."
+        prediction = engine.predict(sample_text)
+        print(f"Prediction: {prediction}")
 
-    # Test the train method
-    epochs = 1  # Start with 1 epoch for testing
-    try:
+        # Start training
+        epochs = 1
         engine.train(epochs)
         print(f"Training completed for {epochs} epoch(s).")
     except Exception as e:
-        print(f"Training failed: {e}")
+        print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     main()
-# __init__.py
-# This file makes the src directory a Python package
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from .config.settings import settings
+
+engine = create_engine(settings.database_uri)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+# src/init_db.py
+
+from .database import engine, Base
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created successfully.")
+
+if __name__ == "__main__":
+    init_db()
+# src/init_db.py
+
+from sqlalchemy.orm import Session
+from .database import engine, Base
+from .models.user import User
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created successfully.")
+
+if __name__ == "__main__":
+    init_db()

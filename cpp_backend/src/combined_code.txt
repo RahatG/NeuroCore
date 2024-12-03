@@ -30,24 +30,42 @@ PYBIND11_MODULE(InterfaceEngine, m) {
 
 #include <string>
 #include <vector>
+#include <memory>
 #include "../model/NeuralNetwork.h"
 #include "../nlp/NLPProcessor.h"
+#include "../utils/Logger.h"
+#include "../training/LossFunctions/LossFunction.h"
+#include "../training/Metrics/Metric.h"
+#include "../data/DataLoader.h"
+#include "../utils/Config.h"
+#include "../training/Trainer.h"
 
 class InterfaceEngine {
 public:
     InterfaceEngine(const std::string& data_path, const std::string& model_output_path);
     std::vector<float> predict(const std::string& input_text);
-    void train(int epochs);
+    void train(int epochs, size_t batch_size);
+
+    // Save and load model
+    void save_model(const std::string& path);
+    void load_model(const std::string& path);
 
 private:
     NeuralNetwork network;
     NLPProcessor nlp_processor;
+    Logger logger;
 
-    // Declare the training data member variable
+    // Training data
     std::vector<std::string> training_data;
 
+    // Loss function and metric
+    std::unique_ptr<LossFunction> loss_fn;
+    std::unique_ptr<Metric> metric_fn;
 
-    // Declare the member functions used in InterfaceEngine.cpp
+    // Configuration
+    Config config;
+
+    // Helper functions
     std::vector<float> get_target_for_data(const std::string& data);
     float calculate_loss(const std::vector<float>& predictions, const std::vector<float>& targets);
     std::vector<float> calculate_gradient(const std::vector<float>& predictions, const std::vector<float>& targets);
@@ -55,93 +73,153 @@ private:
 
 #endif // INTERFACEENGINE_H
 #include "InterfaceEngine.h"
-#include "data/DataLoader.h"
-#include "model/NeuralNetwork.h"
-#include "training/LossFunctions/CrossEntropyLoss.h"
-#include "training/Metrics/Accuracy.h"
-#include "utils/Logger.h"
-#include "nlp/NLPProcessor.h"
-#include <complex>
+#include "../training/LossFunctions/CrossEntropyLoss.h"
+#include "../training/Metrics/Accuracy.h"
+#include "../data/Preprocessing/TextCleaner.h"
+#include "../data/Tokenizer.h"
+#include "../utils/FileUtils.h"
+#include <algorithm> // For std::min
+#include <random>
 
-// Constructor
 InterfaceEngine::InterfaceEngine(const std::string& data_path, const std::string& model_output_path)
-        : network(), nlp_processor() {
+    : network(), nlp_processor(), logger(INFO), config("../config/config.json") {
     // Initialize with data and model paths
     DataLoader data_loader(data_path);
     training_data = data_loader.load_data();
+
+    // Initialize loss function and metric
+    loss_fn = std::make_unique<CrossEntropyLoss>();
+    metric_fn = std::make_unique<Accuracy>();
+
+    // Load model if exists
+    if (FileUtils::file_exists(model_output_path + "model.bin")) {
+        load_model(model_output_path + "model.bin");
+        logger.log("Model loaded from " + model_output_path + "model.bin");
+    } else {
+        logger.log("No existing model found. Starting with a new model.");
+    }
 }
 
-// Predict method
 std::vector<float> InterfaceEngine::predict(const std::string& input_text) {
     std::vector<std::string> tokens = nlp_processor.process_text(input_text);
-    std::vector<float> input_vector(tokens.size(), 0.0f);
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        input_vector[i] = static_cast<float>(tokens[i].length()); // Example conversion
+
+    // Fixed input size
+    const size_t fixed_input_size = 100;
+    std::vector<float> input_vector(fixed_input_size, 0.0f);
+
+    // Convert tokens to input vector
+    for (size_t i = 0; i < std::min(tokens.size(), fixed_input_size); ++i) {
+        // Implement embedding lookup or token encoding
+        input_vector[i] = nlp_processor.get_token_id(tokens[i]);
     }
+
     return network.forward(input_vector);
 }
 
-// Train method
-void InterfaceEngine::train(int epochs) {
-    Logger logger(INFO);
-    CrossEntropyLoss loss_fn;
-    Accuracy metric_fn;
+void InterfaceEngine::train(int epochs, size_t batch_size) {
+    const size_t fixed_input_size = 100; // Ensure consistent input size
+    size_t total_batches = (training_data.size() + batch_size - 1) / batch_size;
 
     for (int epoch = 0; epoch < epochs; ++epoch) {
-        for (const auto& data : training_data) {
-            std::vector<std::string> tokens = nlp_processor.process_text(data);
-            std::vector<float> input_vector(tokens.size(), 0.0f);
-            for (size_t i = 0; i < tokens.size(); ++i) {
-                input_vector[i] = static_cast<float>(tokens[i].length()); // Example conversion
+        logger.log("Starting epoch " + std::to_string(epoch + 1));
+
+        // Shuffle training data to improve training
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(training_data.begin(), training_data.end(), g);
+
+        float epoch_loss = 0.0f;
+        float epoch_accuracy = 0.0f;
+
+        for (size_t batch_num = 0; batch_num < total_batches; ++batch_num) {
+            size_t start_idx = batch_num * batch_size;
+            size_t end_idx = std::min(start_idx + batch_size, training_data.size());
+
+            // Vectors to accumulate gradients over the batch
+            float batch_loss = 0.0f;
+            float batch_accuracy = 0.0f;
+
+            for (size_t idx = start_idx; idx < end_idx; ++idx) {
+                const auto& data = training_data[idx];
+                std::vector<std::string> tokens = nlp_processor.process_text(data);
+
+                // Prepare input vector with fixed size
+                std::vector<float> input_vector(fixed_input_size, 0.0f);
+                for (size_t i = 0; i < std::min(tokens.size(), fixed_input_size); ++i) {
+                    input_vector[i] = nlp_processor.get_token_id(tokens[i]);
+                }
+
+                // Forward pass
+                std::vector<float> output = network.forward(input_vector);
+
+                // Get target and compute loss
+                std::vector<float> target = get_target_for_data(data);
+                float loss = loss_fn->compute_loss(output, target);
+                batch_loss += loss;
+
+                // Compute gradient and backpropagate
+                std::vector<float> grad_output = loss_fn->compute_gradient(output, target);
+                network.backward(grad_output);
+
+                // Update accuracy
+                batch_accuracy += metric_fn->compute(output, target);
             }
-            std::vector<float> output = network.forward(input_vector);
 
-            // Calculate loss and perform backpropagation
-            std::vector<float> target = get_target_for_data(data); // Assume this function provides the target output
-            float loss = calculate_loss(output, target); // Calculate the loss
-            std::vector<float> grad_output = calculate_gradient(output, target); // Calculate the gradient of the loss
-            network.backward(grad_output);
-
-            // Update network parameters
+            // Update network parameters after processing the batch
             network.update_parameters();
+
+            // Log batch loss and accuracy
+            logger.log("Epoch " + std::to_string(epoch + 1) + ", Batch " + std::to_string(batch_num + 1) +
+                       "/" + std::to_string(total_batches) + ": Loss = " + 
+                       std::to_string(batch_loss / (end_idx - start_idx)) +
+                       ", Accuracy = " + std::to_string(batch_accuracy / (end_idx - start_idx)));
+
+            epoch_loss += batch_loss;
+            epoch_accuracy += batch_accuracy;
         }
-        logger.log("Epoch " + std::to_string(epoch + 1) + " completed.");
+
+        // Log epoch metrics
+        logger.log("Epoch " + std::to_string(epoch + 1) + " completed. Average Loss: " +
+                   std::to_string(epoch_loss / training_data.size()) +
+                   ", Average Accuracy: " + std::to_string(epoch_accuracy / training_data.size()));
     }
+
+    // Save the trained model
+    save_model("../Model/model.bin");
+    logger.log("Model saved after training.");
 }
 
-// Helper function to get target vectors
 std::vector<float> InterfaceEngine::get_target_for_data(const std::string& data) {
     // Implement logic to convert data to target vectors
-    // For example, one-hot encoding for classification tasks
+    // For this example, we will generate a dummy target vector
     std::vector<float> target(10, 0.0f); // Assuming 10 classes
-    // Set the appropriate index to 1 based on the data label
-    // Example: target[3] = 1.0f;
+    int random_class = std::hash<std::string>{}(data) % 10;
+    target[random_class] = 1.0f;
     return target;
 }
 
-// Calculate loss using Cross-Entropy
 float InterfaceEngine::calculate_loss(const std::vector<float>& predictions, const std::vector<float>& targets) {
-    // Implement loss calculation, e.g., Cross-Entropy Loss
-    float loss = 0.0f;
-    for(size_t i = 0; i < predictions.size(); ++i) {
-        loss -= targets[i] * std::log(predictions[i] + 1e-15f);
-    }
-    return loss;
+    return loss_fn->compute_loss(predictions, targets);
 }
 
-// Calculate gradient of the loss
 std::vector<float> InterfaceEngine::calculate_gradient(const std::vector<float>& predictions, const std::vector<float>& targets) {
-    // Implement gradient calculation for the loss function
-    std::vector<float> grad(predictions.size(), 0.0f);
-    for(size_t i = 0; i < predictions.size(); ++i) {
-        grad[i] = -targets[i] / (predictions[i] + 1e-15f);
-    }
-    return grad;
+    return loss_fn->compute_gradient(predictions, targets);
+}
+
+void InterfaceEngine::save_model(const std::string& path) {
+    // Implement model saving logic
+    network.save(path);
+}
+
+void InterfaceEngine::load_model(const std::string& path) {
+    // Implement model loading logic
+    network.load(path);
 }
 #ifndef CROSSENTROPYLOSS_H
 #define CROSSENTROPYLOSS_H
 
 #include "LossFunction.h"
+#include <vector>
 
 class CrossEntropyLoss : public LossFunction {
 public:
@@ -169,11 +247,13 @@ public:
 #endif // MEANSQUAREDLOSS_H
 #include "CrossEntropyLoss.h"
 #include <cmath>
+#include <algorithm>
 
 float CrossEntropyLoss::compute_loss(const std::vector<float>& predictions, const std::vector<float>& targets) {
     float loss = 0.0f;
     for(size_t i = 0; i < predictions.size(); ++i) {
-        loss -= targets[i] * std::log(predictions[i] + 1e-15f);
+        float pred = std::max(predictions[i], 1e-15f);
+        loss -= targets[i] * std::log(pred);
     }
     return loss;
 }
@@ -181,7 +261,8 @@ float CrossEntropyLoss::compute_loss(const std::vector<float>& predictions, cons
 std::vector<float> CrossEntropyLoss::compute_gradient(const std::vector<float>& predictions, const std::vector<float>& targets) {
     std::vector<float> grad(predictions.size(), 0.0f);
     for(size_t i = 0; i < predictions.size(); ++i) {
-        grad[i] = -targets[i] / (predictions[i] + 1e-15f);
+        float pred = std::max(predictions[i], 1e-15f);
+        grad[i] = -targets[i] / pred;
     }
     return grad;
 }
@@ -212,6 +293,7 @@ std::vector<float> MeanSquaredLoss::compute_gradient(const std::vector<float>& p
 
 class LossFunction {
 public:
+    virtual ~LossFunction() {}
     virtual float compute_loss(const std::vector<float>& predictions, const std::vector<float>& targets) = 0;
     virtual std::vector<float> compute_gradient(const std::vector<float>& predictions, const std::vector<float>& targets) = 0;
 };
@@ -233,17 +315,15 @@ float Recall::compute(const std::vector<float>& predictions, const std::vector<f
     }
     return actual_positive > 0 ? static_cast<float>(true_positive) / actual_positive : 0.0f;
 }
-#include <cstddef> // Add this line
 #include "Accuracy.h"
+#include <algorithm>
 
 float Accuracy::compute(const std::vector<float>& predictions, const std::vector<float>& targets) {
-    int correct = 0;
-    for (std::size_t i = 0; i < predictions.size(); ++i) {
-        if ((predictions[i] > 0.5f) == (targets[i] > 0.5f)) {
-            correct++;
-        }
-    }
-    return static_cast<float>(correct) / predictions.size();
+    auto pred_it = std::max_element(predictions.begin(), predictions.end());
+    auto target_it = std::max_element(targets.begin(), targets.end());
+    int pred_class = std::distance(predictions.begin(), pred_it);
+    int target_class = std::distance(targets.begin(), target_it);
+    return pred_class == target_class ? 1.0f : 0.0f;
 }
 #ifndef METRIC_H
 #define METRIC_H
@@ -252,6 +332,7 @@ float Accuracy::compute(const std::vector<float>& predictions, const std::vector
 
 class Metric {
 public:
+    virtual ~Metric() {}
     virtual float compute(const std::vector<float>& predictions, const std::vector<float>& targets) = 0;
 };
 
@@ -603,74 +684,92 @@ private:
 DataLoader::DataLoader(const std::string& data_path) : data_path(data_path) {}
 
 std::vector<std::string> DataLoader::load_data() {
-    // Initialize Arrow's memory pool
-    arrow::MemoryPool* pool = arrow::default_memory_pool();
+    try {
+        // Initialize Arrow's memory pool
+        arrow::MemoryPool* pool = arrow::default_memory_pool();
 
-    // Open the Parquet file
-    std::shared_ptr<arrow::io::ReadableFile> infile;
-    auto open_result = arrow::io::ReadableFile::Open(data_path, pool);
-    if (!open_result.ok()) {
-        std::cerr << "Failed to open data file at: " << data_path 
-                  << "\nError: " << open_result.status().ToString() << std::endl;
-        throw std::runtime_error("Failed to open data file.");
-    }
-    infile = *open_result;
-
-    // Create Parquet reader
-    std::unique_ptr<parquet::arrow::FileReader> reader;
-    arrow::Status reader_result = parquet::arrow::OpenFile(infile, pool, &reader);
-    if (!reader_result.ok()) {
-        std::cerr << "Failed to create Parquet reader.\nError: " << reader_result.ToString() << std::endl;
-        throw std::runtime_error("Failed to create Parquet reader.");
-    }
-
-    // Read the entire file into a table
-    std::shared_ptr<arrow::Table> table;
-    arrow::Status table_result = reader->ReadTable(&table);
-    if (!table_result.ok()) {
-        std::cerr << "Failed to read Parquet table.\nError: " << table_result.ToString() << std::endl;
-        throw std::runtime_error("Failed to read Parquet table.");
-    }
-
-    // Extract data from the table
-    std::vector<std::string> data;
-
-    auto schema = table->schema();
-    int num_columns = schema->num_fields();
-    std::vector<std::string> column_names;
-    for (int i = 0; i < num_columns; ++i) {
-        column_names.emplace_back(schema->field(i)->name());
-    }
-
-    // Specify the target column
-    std::string target_column = "text"; // Replace with your actual column name
-    int target_col_index = -1;
-    for (int i = 0; i < num_columns; ++i) {
-        if (column_names[i] == target_column) {
-            target_col_index = i;
-            break;
+        // Open the Parquet file
+        std::shared_ptr<arrow::io::ReadableFile> infile;
+        auto open_result = arrow::io::ReadableFile::Open(data_path, pool);
+        if (!open_result.ok()) {
+            std::cerr << "Failed to open data file at: " << data_path 
+                      << "\nError: " << open_result.status().ToString() << std::endl;
+            throw std::runtime_error("Failed to open data file.");
         }
-    }
+        infile = *open_result;
 
-    if (target_col_index == -1) {
-        std::cerr << "DataLoader Error: Target column '" << target_column << "' not found in Parquet file." << std::endl;
-        throw std::runtime_error("Target column not found in Parquet file.");
-    }
-
-    auto column = table->column(target_col_index)->chunk(0);
-    auto string_array = std::static_pointer_cast<arrow::StringArray>(column);
-
-    int num_rows = table->num_rows();
-    for (int row = 0; row < num_rows; ++row) {
-        if (!string_array->IsNull(row)) {
-            data.emplace_back(string_array->GetString(row));
-        } else {
-            data.emplace_back("");
+        // Create Parquet reader
+        std::unique_ptr<parquet::arrow::FileReader> reader;
+        arrow::Status reader_result = parquet::arrow::OpenFile(infile, pool, &reader);
+        if (!reader_result.ok()) {
+            std::cerr << "Failed to create Parquet reader.\nError: " << reader_result.ToString() << std::endl;
+            throw std::runtime_error("Failed to create Parquet reader.");
         }
-    }
 
-    std::cout << "DataLoader: Successfully loaded " << data.size() << " entries." << std::endl;
-    return data;
+        // Read the entire file into a table
+        std::shared_ptr<arrow::Table> table;
+        arrow::Status table_result = reader->ReadTable(&table);
+        if (!table_result.ok()) {
+            std::cerr << "Failed to read Parquet table.\nError: " << table_result.ToString() << std::endl;
+            throw std::runtime_error("Failed to read Parquet table.");
+        }
+
+        // Extract data from the table
+        std::vector<std::string> data;
+
+        auto schema = table->schema();
+        int num_columns = schema->num_fields();
+        std::vector<std::string> column_names;
+        for (int i = 0; i < num_columns; ++i) {
+            column_names.emplace_back(schema->field(i)->name());
+        }
+
+        // Specify the target column
+        std::string target_column = "markdown"; // Updated to match the Parquet schema
+        int target_col_index = -1;
+        for (int i = 0; i < num_columns; ++i) {
+            if (column_names[i] == target_column) {
+                target_col_index = i;
+                break;
+            }
+        }
+
+        if (target_col_index == -1) {
+            std::cerr << "DataLoader Error: Target column '" << target_column << "' not found in Parquet file." << std::endl;
+            std::cerr << "Available columns are:" << std::endl;
+            for (const auto& col : column_names) {
+                std::cerr << " - " << col << std::endl;
+            }
+            throw std::runtime_error("Target column not found in Parquet file.");
+        }
+
+        // Iterate through all chunks
+        int num_chunks = table->column(target_col_index)->num_chunks();
+        for (int chunk_index = 0; chunk_index < num_chunks; ++chunk_index) {
+            auto chunk = table->column(target_col_index)->chunk(chunk_index);
+            auto string_array = std::static_pointer_cast<arrow::StringArray>(chunk);
+
+            int num_rows = string_array->length();
+            for (int row = 0; row < num_rows; ++row) {
+                if (!string_array->IsNull(row)) {
+                    data.emplace_back(string_array->GetString(row));
+                } else {
+                    data.emplace_back("");
+                }
+            }
+        }
+
+        std::cout << "DataLoader: Successfully loaded " << data.size() << " entries." << std::endl;
+        return data;
+    }
+    catch (const std::bad_alloc& e) {
+        std::cerr << "DataLoader Bad Allocation Error: " << e.what() << std::endl;
+        throw;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "DataLoader Exception: " << e.what() << std::endl;
+        throw;
+    }
 }
 #ifndef TOKENIZER_H
 #define TOKENIZER_H
@@ -738,40 +837,75 @@ std::vector<std::pair<std::string, std::string>> NamedEntityRecognition::recogni
     return std::vector<std::pair<std::string, std::string>>();
 }
 #include "NLPProcessor.h"
-#include "../data/Preprocessing/TextCleaner.h"
-#include "../data/Preprocessing/StopWordsRemover.h"
-#include "../data/Preprocessing/Lemmatiser.h"
-#include "../data/Tokenizer.h"
+#include <fstream>
+#include <sstream>
 
-NLPProcessor::NLPProcessor() {}
+NLPProcessor::NLPProcessor() : config("../config/config.json") {
+    build_vocabulary();
+}
+
+void NLPProcessor::build_vocabulary() {
+    // Load vocabulary from file or build from dataset
+    std::string vocab_path = config.get<std::string>("vocabulary_path");
+    std::ifstream infile(vocab_path);
+    if (!infile.is_open()) {
+        // Handle error or build vocabulary from data
+        return;
+    }
+    std::string line;
+    int index = 0;
+    while (std::getline(infile, line)) {
+        vocabulary[line] = index++;
+    }
+    infile.close();
+}
 
 std::vector<std::string> NLPProcessor::process_text(const std::string& text) {
-    TextCleaner cleaner;
-    StopWordsRemover remover;
-    Lemmatiser lemmatiser;
-    Tokenizer tokenizer;
-
     std::string cleaned = cleaner.clean_text(text);
     std::vector<std::string> tokens = tokenizer.tokenize(cleaned);
-    tokens = remover.remove_stopwords(tokens);
-    std::vector<std::string> lemmatized;
+    tokens = stopwords_remover.remove_stopwords(tokens);
     for(auto &token : tokens) {
-        lemmatized.push_back(lemmatiser.lemmatize(token));
+        token = lemmatiser.lemmatize(token);
     }
-    return lemmatized;
+    return tokens;
+}
+
+int NLPProcessor::get_token_id(const std::string& token) {
+    auto it = vocabulary.find(token);
+    if (it != vocabulary.end()) {
+        return it->second;
+    } else {
+        // Handle unknown token
+        return vocabulary.size(); // Return a special index for unknown tokens
+    }
 }
 #ifndef NLPPROCESSOR_H
 #define NLPPROCESSOR_H
 
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include "../data/Preprocessing/TextCleaner.h"
+#include "../data/Preprocessing/StopWordsRemover.h"
+#include "../data/Preprocessing/Lemmatiser.h"
+#include "../data/Tokenizer.h"
+#include "../utils/Config.h"
 
 class NLPProcessor {
 public:
     NLPProcessor();
     std::vector<std::string> process_text(const std::string& text);
+    int get_token_id(const std::string& token);
+
 private:
-    // Other members and methods
+    TextCleaner cleaner;
+    StopWordsRemover stopwords_remover;
+    Lemmatiser lemmatiser;
+    Tokenizer tokenizer;
+    std::unordered_map<std::string, int> vocabulary;
+    Config config;
+
+    void build_vocabulary();
 };
 
 #endif // NLPPROCESSOR_H
@@ -853,27 +987,30 @@ private:
 };
 
 #endif // RMSPROP_H
-// Adam.cpp
 #include "Adam.h"
 #include <cmath>
-#include <stdexcept>
 
 Adam::Adam(float lr, float b1, float b2, float eps)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0) {}
 
 void Adam::update(
-        std::vector<std::vector<float>>& weights,
-        const std::vector<std::vector<float>>& weight_grads,
-        std::vector<float>& biases,
-        const std::vector<float>& bias_grads
+    std::vector<std::vector<float>>& weights,
+    const std::vector<std::vector<float>>& weight_grads,
+    std::vector<float>& biases,
+    const std::vector<float>& bias_grads
 ) {
     t += 1;
 
     // Initialize moment vectors if first update
     if (m_weights.empty()) {
-        m_weights.resize(weights.size(), std::vector<float>(weights[0].size(), 0.0f));
-        v_weights.resize(weights.size(), std::vector<float>(weights[0].size(), 0.0f));
+        m_weights.resize(weights.size());
+        v_weights.resize(weights.size());
+        for (size_t i = 0; i < weights.size(); ++i) {
+            m_weights[i].resize(weights[i].size(), 0.0f);
+            v_weights[i].resize(weights[i].size(), 0.0f);
+        }
     }
+
     if (m_biases.empty()) {
         m_biases.resize(biases.size(), 0.0f);
         v_biases.resize(biases.size(), 0.0f);
@@ -908,29 +1045,28 @@ class Optimizer {
 public:
     virtual ~Optimizer() {}
     virtual void update(
-            std::vector<std::vector<float>>& weights,
-            const std::vector<std::vector<float>>& weight_grads,
-            std::vector<float>& biases,
-            const std::vector<float>& bias_grads
+        std::vector<std::vector<float>>& weights,
+        const std::vector<std::vector<float>>& weight_grads,
+        std::vector<float>& biases,
+        const std::vector<float>& bias_grads
     ) = 0;
 };
 
 #endif // OPTIMIZER_H
-// Adam.h
 #ifndef ADAM_H
 #define ADAM_H
 
-#include <vector>
 #include "Optimizer.h"
+#include <vector>
 
 class Adam : public Optimizer {
 public:
     Adam(float learning_rate, float beta1, float beta2, float epsilon);
     void update(
-            std::vector<std::vector<float>>& weights,
-            const std::vector<std::vector<float>>& weight_grads,
-            std::vector<float>& biases,
-            const std::vector<float>& bias_grads
+        std::vector<std::vector<float>>& weights,
+        const std::vector<std::vector<float>>& weight_grads,
+        std::vector<float>& biases,
+        const std::vector<float>& bias_grads
     ) override;
 
 private:
@@ -978,7 +1114,6 @@ private:
 };
 
 #endif // RECURRENTLAYER_H
-// DenseLayer.h
 #ifndef DENSELAYER_H
 #define DENSELAYER_H
 
@@ -987,16 +1122,29 @@ private:
 class DenseLayer {
 public:
     DenseLayer(int input_size, int output_size);
+    
+    // Forward and Backward Pass
     std::vector<float> forward(const std::vector<float>& input);
     std::vector<float> backward(const std::vector<float>& grad_output);
 
-    // Accessors for weights and biases
+    // Const Accessors for weights and biases
+    const std::vector<std::vector<float>>& get_weights() const;
+    const std::vector<float>& get_biases() const;
+
+    // Non-const Accessors for weights and biases (for updating)
     std::vector<std::vector<float>>& get_weights();
     std::vector<float>& get_biases();
 
-    // Accessors for gradients
-    std::vector<std::vector<float>> get_weight_gradients() const;
-    std::vector<float> get_bias_gradients() const;
+    // Const Accessors for gradients
+    const std::vector<std::vector<float>>& get_weight_gradients() const;
+    const std::vector<float>& get_bias_gradients() const;
+
+    // Non-const Accessors for gradients (for accumulating gradients)
+    std::vector<std::vector<float>>& get_weight_gradients();
+    std::vector<float>& get_bias_gradients();
+
+    // Reset gradients after parameter updates
+    void reset_gradients();
 
 private:
     int input_size;
@@ -1070,24 +1218,28 @@ std::vector<float> ConvolutionLayer::backward(const std::vector<float>& grad_out
     }
     return grad_input;
 }
-// DenseLayer.cpp
 #include "DenseLayer.h"
 #include <cstdlib>
+#include <algorithm>
+#include <cmath>
 
+// Constructor with Xavier Initialization
 DenseLayer::DenseLayer(int input_sz, int output_sz)
         : input_size(input_sz), output_size(output_sz),
           weights(output_sz, std::vector<float>(input_sz)),
           biases(output_sz, 0.0f),
           weight_gradients(output_sz, std::vector<float>(input_sz, 0.0f)),
           bias_gradients(output_sz, 0.0f) {
-    // Initialize weights and biases
+    // Xavier Initialization
+    float limit = std::sqrt(6.0f / (input_size + output_size));
     for(auto &row : weights) {
         for(auto &w : row) {
-            w = static_cast<float>(rand()) / RAND_MAX;
+            w = ((static_cast<float>(rand()) / RAND_MAX) * 2 * limit) - limit;
         }
     }
 }
 
+// Forward Pass
 std::vector<float> DenseLayer::forward(const std::vector<float>& input_data) {
     input = input_data;
     std::vector<float> output(output_size, 0.0f);
@@ -1100,6 +1252,7 @@ std::vector<float> DenseLayer::forward(const std::vector<float>& input_data) {
     return output;
 }
 
+// Backward Pass
 std::vector<float> DenseLayer::backward(const std::vector<float>& grad_output) {
     // Compute gradients w.r.t weights and biases
     for(int i = 0; i < output_size; ++i) {
@@ -1119,6 +1272,24 @@ std::vector<float> DenseLayer::backward(const std::vector<float>& grad_output) {
     return grad_input;
 }
 
+// Const Accessors
+const std::vector<std::vector<float>>& DenseLayer::get_weights() const {
+    return weights;
+}
+
+const std::vector<float>& DenseLayer::get_biases() const {
+    return biases;
+}
+
+const std::vector<std::vector<float>>& DenseLayer::get_weight_gradients() const {
+    return weight_gradients;
+}
+
+const std::vector<float>& DenseLayer::get_bias_gradients() const {
+    return bias_gradients;
+}
+
+// Non-const Accessors
 std::vector<std::vector<float>>& DenseLayer::get_weights() {
     return weights;
 }
@@ -1127,12 +1298,20 @@ std::vector<float>& DenseLayer::get_biases() {
     return biases;
 }
 
-std::vector<std::vector<float>> DenseLayer::get_weight_gradients() const {
+std::vector<std::vector<float>>& DenseLayer::get_weight_gradients() {
     return weight_gradients;
 }
 
-std::vector<float> DenseLayer::get_bias_gradients() const {
+std::vector<float>& DenseLayer::get_bias_gradients() {
     return bias_gradients;
+}
+
+// Reset Gradients
+void DenseLayer::reset_gradients() {
+    for(auto& wg : weight_gradients) {
+        std::fill(wg.begin(), wg.end(), 0.0f);
+    }
+    std::fill(bias_gradients.begin(), bias_gradients.end(), 0.0f);
 }
 #ifndef TRANSFORMERLAYER_H
 #define TRANSFORMERLAYER_H
@@ -1351,23 +1530,27 @@ std::vector<float> ReLU::derivative(const std::vector<float>& input) {
     }
     return derivatives;
 }
-// NeuralNetwork.cpp
 #include "NeuralNetwork.h"
 #include "Optimizers/Adam.h"
 #include <cmath>
+#include <iostream>
+#include <fstream>
 
+// Constructor with Adam Optimizer
 NeuralNetwork::NeuralNetwork()
-        : optimizer(std::make_unique<Adam>(0.001f, 0.9f, 0.999f, 1e-8f)) { // Using Adam optimizer
+        : optimizer(std::make_unique<Adam>(0.001f, 0.9f, 0.999f, 1e-8f)), logger(INFO) { // Using Adam optimizer
+    // Initialize Dense Layers
     dense_layers.emplace_back(DenseLayer(100, 50));
     dense_layers.emplace_back(DenseLayer(50, 10));
 
-    // Initialize gradient storage based on layers
+    // Initialize Gradient Storage based on layers
     for(auto &layer : dense_layers) {
         weight_grads.emplace_back(layer.get_weight_gradients()); // Each layer's weight gradients
         bias_grads.emplace_back(layer.get_bias_gradients());     // Each layer's bias gradients
     }
 }
 
+// Forward Pass through the Network
 std::vector<float> NeuralNetwork::forward(const std::vector<float>& input) {
     std::vector<float> output = input;
     output = dense_layers[0].forward(output);
@@ -1377,7 +1560,19 @@ std::vector<float> NeuralNetwork::forward(const std::vector<float>& input) {
     return output;
 }
 
+// Backward Pass through the Network
 std::vector<float> NeuralNetwork::backward(const std::vector<float>& loss_grad) {
+    // Reset gradients before accumulating new ones
+    for (std::size_t i = 0; i < dense_layers.size(); ++i) {
+        // Reset weight gradients
+        for(auto &wg : weight_grads[i]) {
+            std::fill(wg.begin(), wg.end(), 0.0f);
+        }
+        // Reset bias gradients
+        std::fill(bias_grads[i].begin(), bias_grads[i].end(), 0.0f);
+    }
+
+    // Backward Pass
     std::vector<float> grad = softmax.derivative(loss_grad);
     grad = dense_layers[1].backward(grad);
     grad = relu.derivative(grad);
@@ -1385,8 +1580,8 @@ std::vector<float> NeuralNetwork::backward(const std::vector<float>& loss_grad) 
 
     // Collect gradients from each layer
     for (std::size_t i = 0; i < dense_layers.size(); ++i) {
-        auto layer_weight_grads = dense_layers[i].get_weight_gradients();
-        auto layer_bias_grads = dense_layers[i].get_bias_gradients();
+        auto& layer_weight_grads = dense_layers[i].get_weight_gradients();
+        auto& layer_bias_grads = dense_layers[i].get_bias_gradients();
         weight_grads[i] = layer_weight_grads;
         bias_grads[i] = layer_bias_grads;
     }
@@ -1394,7 +1589,7 @@ std::vector<float> NeuralNetwork::backward(const std::vector<float>& loss_grad) 
     return grad;
 }
 
-
+// Update Network Parameters using Optimizer
 void NeuralNetwork::update_parameters() {
     // Collect all weights and biases and their gradients
     std::vector<std::vector<float>> all_weights;
@@ -1403,24 +1598,24 @@ void NeuralNetwork::update_parameters() {
     std::vector<float> all_bias_grads;
 
     for (std::size_t i = 0; i < dense_layers.size(); ++i) {
-        auto &w = dense_layers[i].get_weights(); // std::vector<std::vector<float>>
-        auto &b = dense_layers[i].get_biases();  // std::vector<float>
-        auto &wg = weight_grads[i];              // std::vector<std::vector<float>>
-        auto &bg = bias_grads[i];                // std::vector<float>
+        auto& w = dense_layers[i].get_weights(); // std::vector<std::vector<float>>
+        auto& b = dense_layers[i].get_biases();  // std::vector<float>
+        auto& wg = weight_grads[i];              // std::vector<std::vector<float>>
+        auto& bg = bias_grads[i];                // std::vector<float>
 
         // Flatten weights and weight gradients
-        for(auto &weight_vec : w) {
+        for(auto& weight_vec : w) {
             all_weights.emplace_back(weight_vec);
         }
-        for(auto &weight_grad_vec : wg) {
+        for(auto& weight_grad_vec : wg) {
             all_weight_grads.emplace_back(weight_grad_vec);
         }
 
         // Flatten biases and bias gradients
-        for(auto &bias : b) {
+        for(auto& bias : b) {
             all_biases.emplace_back(bias);
         }
-        for(auto &bias_grad : bg) {
+        for(auto& bias_grad : bg) {
             all_bias_grads.emplace_back(bias_grad);
         }
     }
@@ -1429,26 +1624,91 @@ void NeuralNetwork::update_parameters() {
     optimizer->update(all_weights, all_weight_grads, all_biases, all_bias_grads);
 
     // Distribute updated weights and biases back to layers
-    size_t idx = 0;
-    for(auto &layer : dense_layers) {
-        auto &w = layer.get_weights();
-        auto &b = layer.get_biases();
+    size_t idx_w = 0;
+    size_t idx_b = 0;
+    for(auto& layer : dense_layers) {
+        auto& w = layer.get_weights();
+        auto& b = layer.get_biases();
         // Assign weights
-        for(auto &weight_vec : w) {
-            weight_vec = all_weights[idx++];
+        for(auto& weight_vec : w) {
+            weight_vec = all_weights[idx_w++];
         }
         // Assign biases
-        for(auto &bias : b) {
-            bias = all_biases[idx++];
+        for(auto& bias : b) {
+            bias = all_biases[idx_b++];
         }
     }
+
+    // Reset the gradients after the update
+    for (std::size_t i = 0; i < dense_layers.size(); ++i) {
+        // Reset weight gradients
+        for(auto &wg : weight_grads[i]) {
+            std::fill(wg.begin(), wg.end(), 0.0f);
+        }
+        // Reset bias gradients
+        std::fill(bias_grads[i].begin(), bias_grads[i].end(), 0.0f);
+    }
+
+    logger.log("NeuralNetwork: Parameters updated successfully.");
 }
-// NeuralNetwork.h
+
+// Save the Model to a Binary File
+void NeuralNetwork::save(const std::string& path) {
+    std::ofstream ofs(path, std::ios::binary);
+    if (!ofs.is_open()) {
+        logger.log("Failed to open file for saving: " + path, ERROR);
+        return;
+    }
+
+    // Save weights and biases
+    for (const auto& layer : dense_layers) {
+        const auto& weights = layer.get_weights();   // Const accessor
+        const auto& biases = layer.get_biases();     // Const accessor
+
+        // Save weights
+        for (const auto& neuron_weights : weights) {
+            ofs.write(reinterpret_cast<const char*>(neuron_weights.data()), neuron_weights.size() * sizeof(float));
+        }
+
+        // Save biases
+        ofs.write(reinterpret_cast<const char*>(biases.data()), biases.size() * sizeof(float));
+    }
+
+    ofs.close();
+    logger.log("NeuralNetwork: Model saved to " + path);
+}
+
+// Load the Model from a Binary File
+void NeuralNetwork::load(const std::string& path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs.is_open()) {
+        logger.log("Failed to open file for loading: " + path, ERROR);
+        return;
+    }
+
+    // Load weights and biases
+    for (auto& layer : dense_layers) {
+        auto& weights = layer.get_weights();   // Non-const accessor
+        auto& biases = layer.get_biases();     // Non-const accessor
+
+        // Load weights
+        for (auto& neuron_weights : weights) {
+            ifs.read(reinterpret_cast<char*>(neuron_weights.data()), neuron_weights.size() * sizeof(float));
+        }
+
+        // Load biases
+        ifs.read(reinterpret_cast<char*>(biases.data()), biases.size() * sizeof(float));
+    }
+
+    ifs.close();
+    logger.log("NeuralNetwork: Model loaded from " + path);
+}
 #ifndef NEURALNETWORK_H
 #define NEURALNETWORK_H
 
 #include <vector>
 #include <memory>
+#include <string>
 #include "Layers/DenseLayer.h"
 #include "Layers/ConvolutionLayer.h"
 #include "Layers/RecurrentLayer.h"
@@ -1458,6 +1718,7 @@ void NeuralNetwork::update_parameters() {
 #include "Activation/Softmax.h"
 #include "Activation/Tanh.h"
 #include "Optimizers/Optimizer.h"
+#include "../utils/Logger.h"
 
 class NeuralNetwork {
 public:
@@ -1465,6 +1726,11 @@ public:
     std::vector<float> forward(const std::vector<float>& input);
     std::vector<float> backward(const std::vector<float>& loss_grad);
     void update_parameters();
+
+    // Save and load model parameters
+    void save(const std::string& path);
+    void load(const std::string& path);
+
 private:
     std::vector<DenseLayer> dense_layers;
     ReLU relu;
@@ -1472,6 +1738,7 @@ private:
     Activation::Softmax softmax;
     Tanh tanh;
     std::unique_ptr<Optimizer> optimizer;
+    Logger logger;
 
     // Corrected Gradient Storage
     std::vector<std::vector<std::vector<float>>> weight_grads; // [layer][neuron][weight]

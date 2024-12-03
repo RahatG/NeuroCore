@@ -15,3 +15,7 @@ This Python server provides a RESTful API for interacting with the NeuroCore AI 
 1. **Navigate to the Python Directory**
    ```bash
    cd NeuroCore/Python
+
+
+source /home/rahat/NeuroCore/Python/.venv/bin/activate
+python --version

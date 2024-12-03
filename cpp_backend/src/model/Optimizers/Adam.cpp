@@ -1,24 +1,27 @@
-// Adam.cpp
 #include "Adam.h"
 #include <cmath>
-#include <stdexcept>
 
 Adam::Adam(float lr, float b1, float b2, float eps)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0) {}
 
 void Adam::update(
-        std::vector<std::vector<float>>& weights,
-        const std::vector<std::vector<float>>& weight_grads,
-        std::vector<float>& biases,
-        const std::vector<float>& bias_grads
+    std::vector<std::vector<float>>& weights,
+    const std::vector<std::vector<float>>& weight_grads,
+    std::vector<float>& biases,
+    const std::vector<float>& bias_grads
 ) {
     t += 1;
 
     // Initialize moment vectors if first update
     if (m_weights.empty()) {
-        m_weights.resize(weights.size(), std::vector<float>(weights[0].size(), 0.0f));
-        v_weights.resize(weights.size(), std::vector<float>(weights[0].size(), 0.0f));
+        m_weights.resize(weights.size());
+        v_weights.resize(weights.size());
+        for (size_t i = 0; i < weights.size(); ++i) {
+            m_weights[i].resize(weights[i].size(), 0.0f);
+            v_weights[i].resize(weights[i].size(), 0.0f);
+        }
     }
+
     if (m_biases.empty()) {
         m_biases.resize(biases.size(), 0.0f);
         v_biases.resize(biases.size(), 0.0f);
